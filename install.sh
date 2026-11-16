@@ -310,14 +310,25 @@ log "Конфигурация сохранена: /etc/x-ui/install.conf"
 # ---------------------------------------------------------------------------
 log "Настройка панели 3x-ui..."
 
-# Сначала обязательные параметры (должны пройти)
-"$XUI_BIN" setting \
-    -username "$PANEL_USER" \
-    -password "$PANEL_PASS" \
-    -port "$PANEL_PORT" \
-    -panelListen "127.0.0.1" \
-    -webBasePath "$PANEL_PATH" \
-    >/dev/null 2>&1 || die "x-ui setting: не удалось задать основные параметры панели"
+# Сначала остановим панель — иначе SQLite-база залочена запущенным сервисом
+# и x-ui setting не сможет записать параметры.
+systemctl stop x-ui >/dev/null 2>&1 || true
+sleep 1
+
+# Обязательные параметры (должны пройти).
+# ВАЖНО: в текущем MHSanaei/3x-ui флаг называется -listenIP (НЕ -panelListen).
+if ! "$XUI_BIN" setting \
+        -username "$PANEL_USER" \
+        -password "$PANEL_PASS" \
+        -port "$PANEL_PORT" \
+        -listenIP "127.0.0.1" \
+        -webBasePath "$PANEL_PATH" \
+        >/tmp/x-ui-setting.err 2>&1; then
+    echo "--- вывод x-ui setting ---"
+    cat /tmp/x-ui-setting.err
+    echo "----------------------------"
+    die "x-ui setting: не удалось задать основные параметры панели (см. вывод выше)"
+fi
 
 # Затем параметры подписки (опционально — флаги зависят от версии 3x-ui)
 "$XUI_BIN" setting \
@@ -328,7 +339,10 @@ log "Настройка панели 3x-ui..."
     -subEncrypt "true" \
     -subShowInfo "true" \
     -subUpdates "12" \
-    >/dev/null 2>&1 || warn "x-ui setting: часть флагов подписки не поддерживается вашей версией 3x-ui (не критично, подписку можно настроить через панель)"
+    >/tmp/x-ui-sub.err 2>&1 || {
+        warn "x-ui setting: часть флагов подписки не поддерживается вашей версией 3x-ui (не критично, подписку можно настроить через панель)"
+        cat /tmp/x-ui-sub.err
+    }
 
 # Перезапуск панели для применения настроек
 systemctl restart x-ui
