@@ -113,7 +113,7 @@ req.add_header('Content-Type', 'application/json')
 opener.open(req, timeout=30).read()
 
 # Получаем текущий инбаунд
-req = urllib.request.Request(f"{base}/inbound/get/{inbound_id}")
+req = urllib.request.Request(f"{base}/panel/api/inbounds/get/{inbound_id}")
 resp = opener.open(req, timeout=30)
 data = json.loads(resp.read().decode())
 if not data.get('success'):
@@ -158,7 +158,7 @@ update_payload = {
 }
 
 body = json.dumps(update_payload).encode()
-req = urllib.request.Request(f"{base}/inbound/update/{inbound_id}", data=body, method='POST')
+req = urllib.request.Request(f"{base}/panel/api/inbounds/update/{inbound_id}", data=body, method='POST')
 req.add_header('Content-Type', 'application/json')
 resp = opener.open(req, timeout=30)
 result = json.loads(resp.read().decode())

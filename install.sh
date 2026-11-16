@@ -984,14 +984,17 @@ if not result.get('success'):
     sys.exit(1)
 print("  OK, авторизованы")
 
+_inbound_created_count = 0
 def add_inbound(inbound):
-    res = api_post('/inbound/add', inbound)
+    global _inbound_created_count
+    res = api_post('/panel/api/inbounds/add', inbound)
     if res and res.get('success'):
         oid = (res.get('obj') or {}).get('id')
         print(f"  [+OK] {inbound['remark']:30s}  id={oid}  port={inbound['port']}")
+        _inbound_created_count += 1
         return oid
     else:
-        msg = res.get('msg') if res else 'no response'
+        msg = res.get('msg') if res else 'no response (возможно 404 — неверный API-путь или не авторизованы)'
         # Если уже существует - не считаем ошибкой
         if 'already' in str(msg).lower() or 'exist' in str(msg).lower():
             print(f"  [SKIP] {inbound['remark']:30s} уже существует")
@@ -1228,8 +1231,26 @@ if not res or not res.get('success'):
     # fallback: рестарт сервиса
     pass  # выполним ниже через systemctl
 
+print(f"\n  === Создано инбаундов: {_inbound_created_count} из 5 ===")
+if _inbound_created_count == 0:
+    print("", file=sys.stderr)
+    print("=" * 60, file=sys.stderr)
+    print("!!! ВНИМАНИЕ: ни один инбаунд не создан!", file=sys.stderr)
+    print("!!! Проверьте:", file=sys.stderr)
+    print("!!!   1) логин в панель прошёл (выше должно быть 'OK, авторизованы')", file=sys.stderr)
+    print("!!!   2) версия 3x-ui — MHSanaei (не vaxilu/старый форк)", file=sys.stderr)
+    print("!!!   3) /var/log/3x-ui-install-inbounds.log — детали API-ответов", file=sys.stderr)
+    print("=" * 60, file=sys.stderr)
+    sys.exit(1)
+elif _inbound_created_count < 5:
+    print(f"\n  [WARN] Создано только {_inbound_created_count} из 5 инбаундов — посмотрите строки [FAIL] выше.", file=sys.stderr)
+
 print("  Готово: все инбаунды созданы")
 PYEOF
+PY_EXIT=$?
+if [[ $PY_EXIT -ne 0 ]]; then
+    die "Создание инбаундов завершилось с ошибкой (код $PY_EXIT) — см. вывод выше"
+fi
 
 # Рестарт 3x-ui для гарантированного применения всех инбаундов
 log "Перезапуск 3x-ui и применение конфигурации Xray..."
@@ -1357,7 +1378,7 @@ req.add_header('Content-Type', 'application/json')
 opener.open(req, timeout=30).read()
 
 # Получаем текущий инбаунд
-req = urllib.request.Request(f"{base}/inbound/get/{inbound_id}")
+req = urllib.request.Request(f"{base}/panel/api/inbounds/get/{inbound_id}")
 resp = opener.open(req, timeout=30)
 data = json.loads(resp.read().decode())
 if not data.get('success'):
@@ -1402,7 +1423,7 @@ update_payload = {
 }
 
 body = json.dumps(update_payload).encode()
-req = urllib.request.Request(f"{base}/inbound/update/{inbound_id}", data=body, method='POST')
+req = urllib.request.Request(f"{base}/panel/api/inbounds/update/{inbound_id}", data=body, method='POST')
 req.add_header('Content-Type', 'application/json')
 resp = opener.open(req, timeout=30)
 result = json.loads(resp.read().decode())
