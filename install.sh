@@ -683,7 +683,8 @@ NGINXEOF1
 ln -sf "$NGINX_CONF" "/etc/nginx/sites-enabled/${DOMAIN}.conf"
 rm -f /etc/nginx/sites-enabled/default
 
-nginx -t 2>&1 | grep -q "successful" || die "Конфиг nginx невалиден (этап 1)"
+NGINX_TEST_OUT="$(nginx -t 2>&1)"
+echo "$NGINX_TEST_OUT" | grep -q "successful" || { echo "$NGINX_TEST_OUT"; die "Конфиг nginx невалиден (этап 1)"; }
 systemctl restart nginx
 log "Nginx HTTP запущен"
 
@@ -692,10 +693,36 @@ log "Nginx HTTP запущен"
 # ---------------------------------------------------------------------------
 log "Получение SSL-сертификата Let's Encrypt..."
 
+# Определяем, на какие домены заказывать сертификат.
+# Апекс (DOMAIN) — всегда. www.${DOMAIN} — только если у него есть A/AAAA-запись,
+# указывающая на THIS сервер. Иначе Let's Encrypt падает с
+# "no valid A records found for www.${DOMAIN}" (см. https://letsencrypt.org/docs/).
+SERVER_IPV4="$(curl -fsS4 https://ifconfig.me 2>/dev/null || echo '')"
+SERVER_IPV6="$(curl -fsS6 https://ifconfig.me 2>/dev/null || true)"
+
+CERT_DOMAINS=(-d "${DOMAIN}")
+WWW_DOMAIN="www.${DOMAIN}"
+WWW_IPS="$(getent hosts "$WWW_DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')"
+
+if [[ -n "$WWW_IPS" ]]; then
+    # www резолвится — проверим, что хотя бы один из адресов совпадает с IP сервера.
+    if [[ "$WWW_IPS" == *"$SERVER_IPV4"* ]] || [[ -n "$SERVER_IPV6" && "$WWW_IPS" == *"$SERVER_IPV6"* ]]; then
+        CERT_DOMAINS+=(-d "$WWW_DOMAIN")
+        log "DNS: $WWW_DOMAIN → $WWW_IPS (совпадает с IP сервера), сертификат будет включать www."
+        NGINX_SERVER_NAMES="${DOMAIN} ${WWW_DOMAIN}"
+    else
+        warn "DNS: $WWW_DOMAIN резолвится в [$WWW_IPS], но это НЕ IP этого сервера ($SERVER_IPV4). Сертификат заказываем только на ${DOMAIN}."
+        NGINX_SERVER_NAMES="${DOMAIN}"
+    fi
+else
+    log "DNS: A/AAAA-запись для $WWW_DOMAIN не найдена — сертификат заказываем только на ${DOMAIN}."
+    NGINX_SERVER_NAMES="${DOMAIN}"
+fi
+
 CERTBOT_SUCCESS=0
 for attempt in 1 2 3; do
     if certbot certonly --webroot -w /var/www/landing \
-        -d "${DOMAIN}" -d "www.${DOMAIN}" \
+        "${CERT_DOMAINS[@]}" \
         --email "${EMAIL}" \
         --agree-tos \
         --no-eff-email \
@@ -708,7 +735,7 @@ for attempt in 1 2 3; do
     sleep 10
 done
 
-[[ $CERTBOT_SUCCESS -eq 0 ]] && die "Не удалось получить SSL-сертификат. Проверьте: DNS домена, открыт ли порт 80."
+[[ $CERTBOT_SUCCESS -eq 0 ]] && die "Не удалось получить SSL-сертификат. Проверьте: (1) A-запись ${DOMAIN} указывает на $SERVER_IPV4; (2) порт 80 открыт извне; (3) Nginx слушает :80 и отдаёт /. Подробности: /var/log/letsencrypt/letsencrypt.log"
 
 CERT_PATH="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
 KEY_PATH="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
@@ -753,10 +780,9 @@ server {
 
 # --- HTTPS: лендинг + панель + инбаунды WS ---
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
-    server_name ${DOMAIN} www.${DOMAIN};
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${NGINX_SERVER_NAMES};
 
     # SSL
     ssl_certificate     ${CERT_PATH};
@@ -852,7 +878,8 @@ server {
 # Рекомендованные глобальные настройки nginx уже в /etc/nginx/nginx.conf
 NGINXEOF2
 
-nginx -t 2>&1 | grep -q "successful" || die "Конфиг nginx невалиден (этап 2)"
+NGINX_TEST_OUT="$(nginx -t 2>&1)"
+echo "$NGINX_TEST_OUT" | grep -q "successful" || { echo "$NGINX_TEST_OUT"; die "Конфиг nginx невалиден (этап 2)"; }
 systemctl reload nginx
 log "Nginx HTTPS сконфигурирован"
 
